@@ -101,7 +101,7 @@ const DOCUMENT_SEEDS: DocumentSeed[] = [
     id: 'doc-003',
     title: 'Merger_Agreement_Redline.docx',
     characterCount: 145800,
-    status: 'flagged',
+    status: 'pending',
     redactions: [
       { text: 'James Whitfield III', type: 'PERSON_NAME', confidence: 0.95, status: 'approved' },
       { text: 'j.whitfield@acquireco.io', type: 'EMAIL', confidence: 0.99, status: 'approved' },
@@ -163,7 +163,7 @@ const DOCUMENT_SEEDS: DocumentSeed[] = [
     id: 'doc-008',
     title: 'Insurance_Claim_Form_8842.pdf',
     characterCount: 15800,
-    status: 'flagged',
+    status: 'pending',
     redactions: [
       { text: 'Susan Delgado', type: 'PERSON_NAME', confidence: 0.96, status: 'approved' },
       { text: '4532-8890-1123-5567', type: 'CREDIT_CARD', confidence: 0.99, status: 'approved' },
@@ -232,7 +232,7 @@ const DOCUMENT_SEEDS: DocumentSeed[] = [
     id: 'doc-013',
     title: 'Expert_Witness_Report_Dr_Patel.pdf',
     characterCount: 78900,
-    status: 'flagged',
+    status: 'pending',
     redactions: [
       { text: 'Dr. Anika Patel', type: 'PERSON_NAME', confidence: 0.98, status: 'approved' },
       { text: 'apatel@forensicmed.com', type: 'EMAIL', confidence: 0.99, status: 'approved' },
@@ -374,12 +374,10 @@ export function getQueueStats(): {
   total: number;
   pending: number;
   approved: number;
-  flagged: number;
   averageConfidence: number;
 } {
   const pending = MOCK_DOCUMENTS.filter((d) => d.status === 'pending').length;
   const approved = MOCK_DOCUMENTS.filter((d) => d.status === 'approved').length;
-  const flagged = MOCK_DOCUMENTS.filter((d) => d.status === 'flagged').length;
   const averageConfidence = roundConfidence(
     MOCK_DOCUMENTS.reduce((sum, d) => sum + d.confidenceScore, 0) / MOCK_DOCUMENTS.length,
   );
@@ -388,7 +386,6 @@ export function getQueueStats(): {
     total: MOCK_DOCUMENTS.length,
     pending,
     approved,
-    flagged,
     averageConfidence,
   };
 }

@@ -64,9 +64,3 @@ export function updateRedactionStatus(
   return redactions[index];
 }
 
-/**
- * Counts documents no longer awaiting triage — powers the queue progress bar.
- */
-export function getProcessedCount(): number {
-  return documents.filter((doc) => doc.status === 'approved' || doc.status === 'flagged').length;
-}

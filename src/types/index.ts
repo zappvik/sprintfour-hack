@@ -11,10 +11,9 @@
  * Lifecycle state of a document in Maya's review queue.
  *
  * - `pending`  — Awaiting review; default for incoming bulk uploads.
- * - `approved` — All redactions accepted; safe to export/share with AI tools.
- * - `flagged`  — Needs attention (low confidence aggregate or manual flag); stays in queue.
+ * - `approved` — Document has been reviewed and deferred selections are finalized.
  */
-export type DocumentStatus = 'pending' | 'approved' | 'flagged';
+export type DocumentStatus = 'pending' | 'approved';
 
 /**
  * Triage outcome for an individual PII span after Maya's review.
@@ -71,7 +70,7 @@ export interface Document {
 
   /**
    * Mean confidence (0–1) across all redactions in this document.
-   * Low averages drive `flagged` status and warm/red confidence chips in the UI.
+   * Helps Maya judge whether a file may need extra scrutiny before finalizing.
    */
   confidenceScore: number;
 

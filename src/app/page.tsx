@@ -8,14 +8,13 @@
  */
 
 import { buildMockDocumentBody, segmentContentForHighlights } from '@/lib/mockDocumentContent';
-import { formatConfidence, PII_TYPE_COLORS, PII_TYPE_LABELS } from '@/lib/piiLabels';
+import { formatConfidence, PII_TYPE_LABELS } from '@/lib/piiLabels';
 import type { Document, DocumentStatus, Redaction, RedactionStatus } from '@/types';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /** API envelope for GET /api/documents */
 interface DocumentsResponse {
   documents: Document[];
-  meta: { total: number; processed: number };
 }
 
 /** API envelope for GET /api/documents/[id] */
@@ -39,8 +38,6 @@ function statusAccentClass(status: DocumentStatus): string {
   switch (status) {
     case 'approved':
       return 'border-l-emerald-500';
-    case 'flagged':
-      return 'border-l-amber-500';
     default:
       return 'border-l-zinc-600';
   }
@@ -50,45 +47,25 @@ function StatusDot({ status }: { status: DocumentStatus }) {
   const color =
     status === 'approved'
       ? 'bg-emerald-400'
-      : status === 'flagged'
-        ? 'bg-amber-400'
-        : 'bg-zinc-500';
+      : 'bg-zinc-500';
 
   return <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${color}`} aria-hidden />;
-}
-
-function QueueProgress({ processed, total }: { processed: number; total: number }) {
-  const percent = total === 0 ? 0 : Math.round((processed / total) * 100);
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between text-xs font-medium uppercase tracking-wide text-zinc-400">
-        <span>Queue Progress</span>
-        <span className="tabular-nums text-zinc-200">
-          {processed} / {total} Processed
-        </span>
-      </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
-        <div
-          className="h-full rounded-full bg-emerald-500 transition-[width] duration-150"
-          style={{ width: `${percent}%` }}
-        />
-      </div>
-    </div>
-  );
 }
 
 function QueueItem({
   document,
   isSelected,
   onSelect,
+  itemRef,
 }: {
   document: Document;
   isSelected: boolean;
   onSelect: () => void;
+  itemRef: (el: HTMLButtonElement | null) => void;
 }) {
   return (
     <button
+      ref={itemRef}
       type="button"
       onClick={onSelect}
       className={`flex w-full items-start gap-2 border-l-2 px-3 py-2 text-left text-sm transition-colors ${statusAccentClass(document.status)} ${
@@ -107,7 +84,7 @@ function QueueItem({
 }
 
 /**
- * Center-panel span — type-colored block when redacted, dashed type-colored underline when overruled.
+ * Center-panel span — consistent defer styling for clear, fast scanning.
  */
 function RedactionHighlight({
   redaction,
@@ -118,12 +95,10 @@ function RedactionHighlight({
   isActive: boolean;
   spanRef: (el: HTMLSpanElement | null) => void;
 }) {
-  const isRedacted = redaction.status === 'approved';
-  const colors = PII_TYPE_COLORS[redaction.type];
-
-  const styleClass = isRedacted
-    ? `${colors.redactedBg} ${colors.redactedText} select-none`
-    : `${colors.visibleText} underline decoration-dashed underline-offset-4 ${colors.visibleUnderline}`;
+  const isDeferred = redaction.status === 'approved';
+  const styleClass = isDeferred
+    ? 'bg-emerald-600/35 text-emerald-100 font-semibold line-through decoration-emerald-300/80 shadow-sm'
+    : 'text-zinc-300 underline decoration-zinc-500 decoration-dashed underline-offset-4';
 
   const activeRing = isActive ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-zinc-950' : '';
 
@@ -133,8 +108,8 @@ function RedactionHighlight({
       data-redaction-id={redaction.id}
       className={`rounded-sm px-0.5 ${styleClass} ${activeRing}`}
       aria-label={
-        isRedacted
-          ? `Redacted: ${PII_TYPE_LABELS[redaction.type]}`
+        isDeferred
+          ? `Deferred: ${PII_TYPE_LABELS[redaction.type]}`
           : `Kept visible (overruled): ${PII_TYPE_LABELS[redaction.type]}`
       }
     >
@@ -187,14 +162,12 @@ function DocumentViewer({
   }
 
   const statusLabel =
-    status === 'approved' ? 'Approved' : status === 'flagged' ? 'Flagged' : 'Pending review';
+    status === 'approved' ? 'Approved' : 'Pending review';
 
   const statusBadgeClass =
     status === 'approved'
       ? 'bg-emerald-500/15 text-emerald-400'
-      : status === 'flagged'
-        ? 'bg-amber-500/15 text-amber-400'
-        : 'bg-zinc-800 text-zinc-400';
+      : 'bg-zinc-800 text-zinc-400';
 
   return (
     <section className="col-span-6 flex min-h-0 flex-col border-x border-zinc-800 bg-zinc-950">
@@ -203,7 +176,7 @@ function DocumentViewer({
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold text-zinc-100">{title}</h1>
           <p className="mt-0.5 text-xs text-zinc-500">
-            Colored blocks = redacted by type · dashed underline = kept visible
+            Green strikethrough = deferred · dashed underline = keep visible
           </p>
         </div>
         <span className={`shrink-0 rounded px-2 py-1 text-xs font-medium ${statusBadgeClass}`}>
@@ -235,7 +208,7 @@ function DocumentViewer({
 }
 
 /**
- * Right-panel triage card — checkbox drives redact vs keep-visible decision.
+ * Right-panel triage card — checkbox drives defer vs keep-visible decision.
  */
 function RedactionCard({
   redaction,
@@ -250,9 +223,8 @@ function RedactionCard({
   onToggle: () => void;
   cardRef: (el: HTMLDivElement | null) => void;
 }) {
-  const isRedacted = redaction.status === 'approved';
+  const isDeferred = redaction.status === 'approved';
   const isRejected = redaction.status === 'rejected';
-  const colors = PII_TYPE_COLORS[redaction.type];
 
   return (
     <div
@@ -260,30 +232,28 @@ function RedactionCard({
       tabIndex={isActive ? 0 : -1}
       role="button"
       onClick={onActivate}
-      className={`rounded-md border border-l-2 p-3 transition-colors outline-none ${colors.cardAccent} ${
+      className={`rounded-md border border-l-2 border-l-emerald-500 p-3 transition-colors outline-none ${
         isActive
           ? 'border-emerald-500 ring-2 ring-emerald-500 bg-zinc-900'
           : 'border-zinc-800 bg-zinc-900/50 hover:border-zinc-700'
       } ${isRejected ? 'opacity-50' : ''}`}
-      aria-pressed={isRedacted}
+      aria-pressed={isDeferred}
     >
       <div className="flex items-start gap-2.5">
         <input
           type="checkbox"
-          checked={isRedacted}
+          checked={isDeferred}
           onChange={(event) => {
             event.stopPropagation();
             onToggle();
           }}
           onClick={(event) => event.stopPropagation()}
           className="mt-0.5 h-4 w-4 shrink-0 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
-          aria-label={isRedacted ? 'Redact this span' : 'Keep this span visible'}
+          aria-label={isDeferred ? 'Defer this span' : 'Keep this span visible'}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <span
-              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${colors.badgeBg} ${colors.badgeText}`}
-            >
+            <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-300">
               {PII_TYPE_LABELS[redaction.type]}
             </span>
             <span className="shrink-0 text-xs font-medium text-emerald-400">
@@ -311,7 +281,8 @@ function RedactionListPanel({
   activeRedactionId,
   onActivate,
   onToggle,
-  onFinishDocument,
+  onDeferSelected,
+  onUndoDeferrals,
   isLoading,
   cardRefs,
   panelRef,
@@ -320,7 +291,8 @@ function RedactionListPanel({
   activeRedactionId: string | null;
   onActivate: (id: string) => void;
   onToggle: (id: string) => void;
-  onFinishDocument: () => void;
+  onDeferSelected: () => void;
+  onUndoDeferrals: () => void;
   isLoading: boolean;
   cardRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
   panelRef: React.RefObject<HTMLElement | null>;
@@ -334,6 +306,9 @@ function RedactionListPanel({
       <header className="shrink-0 border-b border-zinc-800 px-4 py-3">
         <h2 className="text-sm font-semibold text-zinc-100">PII Spans</h2>
         <p className="mt-0.5 text-xs text-zinc-500">{redactions.length} detected in document</p>
+        <p className="mt-1 text-[11px] text-zinc-400">
+          Checked = Defer in output · Unchecked = Keep visible
+        </p>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -368,13 +343,18 @@ function RedactionListPanel({
         Toggle ·{' '}
         <button
           type="button"
-          onClick={onFinishDocument}
+          onClick={onDeferSelected}
           className="ml-1 rounded border border-emerald-600/40 bg-emerald-950/50 px-2 py-0.5 text-emerald-400 hover:bg-emerald-900/50"
         >
-          Finish
+          Defer selected (D)
         </button>
-        <span className="ml-1 text-zinc-600">or</span>{' '}
-        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">D</kbd>
+        <button
+          type="button"
+          onClick={onUndoDeferrals}
+          className="ml-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-zinc-300 hover:bg-zinc-800"
+        >
+          Undo deferrals (U)
+        </button>
       </footer>
     </aside>
   );
@@ -417,8 +397,6 @@ function findNextPendingId(currentId: string, queue: Document[]): string | null 
 
 export default function ReviewDashboard() {
   const [documents, setDocuments] = useState<Document[]>([]);
-  const [processedCount, setProcessedCount] = useState(0);
-  const [totalCount, setTotalCount] = useState(20);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DocumentDetailResponse | null>(null);
   const [redactions, setRedactions] = useState<Redaction[]>([]);
@@ -429,6 +407,7 @@ export default function ReviewDashboard() {
   const scrollContainerRef = useRef<HTMLElement>(null);
   const spanRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const queueItemRefs = useRef<Map<string, HTMLButtonElement>>(new Map());
   const rightPanelRef = useRef<HTMLElement>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -448,8 +427,6 @@ export default function ReviewDashboard() {
     if (!response.ok) throw new Error('Failed to load document queue');
     const data: DocumentsResponse = await response.json();
     setDocuments(data.documents);
-    setProcessedCount(data.meta.processed);
-    setTotalCount(data.meta.total);
     return data.documents;
   }, []);
 
@@ -566,7 +543,56 @@ export default function ReviewDashboard() {
     [selectedId, redactions, showToast],
   );
 
-  const finishDocument = useCallback(async () => {
+  /**
+   * Clears all current-document deferrals in one action so Maya can restart triage fast.
+   */
+  const undoDeferrals = useCallback(async () => {
+    if (!selectedId) return;
+
+    const deferredRedactions = redactions.filter((redaction) => redaction.status === 'approved');
+    if (deferredRedactions.length === 0) {
+      showToast('No deferrals to undo', 'warning');
+      return;
+    }
+
+    const results = await Promise.all(
+      deferredRedactions.map(async (redaction) => {
+        const response = await fetch(
+          `/api/documents/${selectedId}/redactions/${redaction.id}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: 'rejected' }),
+          },
+        );
+
+        if (!response.ok) {
+          throw new Error(`Failed to undo deferral for ${redaction.id}`);
+        }
+
+        const data: { redaction: Redaction } = await response.json();
+        return data.redaction;
+      }),
+    );
+
+    const updatedById = new Map(results.map((redaction) => [redaction.id, redaction]));
+
+    setRedactions((prev) => prev.map((redaction) => updatedById.get(redaction.id) ?? redaction));
+    setDetail((prev) =>
+      prev
+        ? {
+            ...prev,
+            redactions: prev.redactions.map(
+              (redaction) => updatedById.get(redaction.id) ?? redaction,
+            ),
+          }
+        : prev,
+    );
+
+    showToast('All deferrals undone', 'success');
+  }, [selectedId, redactions, showToast]);
+
+  const deferSelectedAndContinue = useCallback(async () => {
     if (!selectedId) return;
 
     const currentId = selectedId;
@@ -578,7 +604,7 @@ export default function ReviewDashboard() {
     });
 
     if (!response.ok) {
-      showToast('Could not finish document', 'warning');
+      showToast('Could not defer document', 'warning');
       return;
     }
 
@@ -586,7 +612,7 @@ export default function ReviewDashboard() {
     const nextId = findNextPendingId(currentId, queue);
 
     if (nextId) {
-      showToast('Document finished — advancing queue', 'success');
+      showToast('Deferred selections applied — advancing queue', 'success');
       setSelectedId(nextId);
     } else if (countPending(queue) === 0) {
       showToast('Queue cleared!', 'success');
@@ -594,7 +620,7 @@ export default function ReviewDashboard() {
     } else {
       const fallback = queue.find((doc) => doc.status === 'pending');
       if (fallback) {
-        showToast('Document finished — advancing queue', 'success');
+        showToast('Deferred selections applied — advancing queue', 'success');
         setSelectedId(fallback.id);
       }
     }
@@ -643,6 +669,16 @@ export default function ReviewDashboard() {
     cardRefs.current.clear();
     fetchDocumentDetail(selectedId);
   }, [selectedId, fetchDocumentDetail]);
+
+  /**
+   * Keeps the left queue panel aligned with keyboard navigation ([ and ]).
+   * This prevents Maya from losing visual context when jumping between files.
+   */
+  useEffect(() => {
+    if (!selectedId) return;
+    const queueItem = queueItemRefs.current.get(selectedId);
+    queueItem?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [selectedId]);
 
   /** Sync-scroll center span whenever the active right-panel card changes. */
   useEffect(() => {
@@ -705,7 +741,12 @@ export default function ReviewDashboard() {
         case 'd':
         case 'D':
           event.preventDefault();
-          finishDocument();
+          deferSelectedAndContinue();
+          break;
+        case 'u':
+        case 'U':
+          event.preventDefault();
+          undoDeferrals();
           break;
         default:
           break;
@@ -718,7 +759,8 @@ export default function ReviewDashboard() {
     navigateRedactionCard,
     navigateQueue,
     toggleRedaction,
-    finishDocument,
+    deferSelectedAndContinue,
+    undoDeferrals,
     activeRedactionId,
     orderedRedactionIds,
   ]);
@@ -741,7 +783,6 @@ export default function ReviewDashboard() {
               Bulk Review
             </span>
           </div>
-          <QueueProgress processed={processedCount} total={totalCount} />
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto" aria-label="Document queue">
@@ -754,6 +795,10 @@ export default function ReviewDashboard() {
                 document={document}
                 isSelected={document.id === selectedId}
                 onSelect={() => setSelectedId(document.id)}
+                itemRef={(el) => {
+                  if (el) queueItemRefs.current.set(document.id, el);
+                  else queueItemRefs.current.delete(document.id);
+                }}
               />
             ))
           )}
@@ -785,7 +830,8 @@ export default function ReviewDashboard() {
             activeRedactionId={activeRedactionId}
             onActivate={activateRedaction}
             onToggle={toggleRedaction}
-            onFinishDocument={finishDocument}
+            onDeferSelected={deferSelectedAndContinue}
+            onUndoDeferrals={undoDeferrals}
             isLoading={isDetailLoading}
             cardRefs={cardRefs}
             panelRef={rightPanelRef}

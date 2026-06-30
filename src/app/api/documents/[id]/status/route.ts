@@ -1,5 +1,5 @@
 /**
- * @fileoverview PATCH /api/documents/[id]/status — keyboard-driven approve / flag actions.
+ * @fileoverview PATCH /api/documents/[id]/status — updates document review status.
  */
 
 import { updateDocumentStatus } from '@/lib/documentStore';
@@ -10,10 +10,10 @@ interface RouteContext {
   params: Promise<{ id: string }>;
 }
 
-const VALID_STATUSES: DocumentStatus[] = ['pending', 'approved', 'flagged'];
+const VALID_STATUSES: DocumentStatus[] = ['pending', 'approved'];
 
 /**
- * Updates document workflow status. Called by Space (approve) and F (flag) shortcuts.
+ * Updates document workflow status.
  */
 export async function PATCH(request: Request, context: RouteContext): Promise<NextResponse> {
   const { id } = await context.params;
@@ -29,7 +29,7 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Ne
 
   if (!status || !VALID_STATUSES.includes(status)) {
     return NextResponse.json(
-      { error: 'status must be one of: pending, approved, flagged' },
+      { error: 'status must be one of: pending, approved' },
       { status: 400 },
     );
   }
