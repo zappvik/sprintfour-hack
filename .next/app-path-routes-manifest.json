@@ -1,8 +1,0 @@
-{
-  "/_not-found/page": "/_not-found",
-  "/api/documents/[id]/redactions/[redactionId]/route": "/api/documents/[id]/redactions/[redactionId]",
-  "/api/documents/route": "/api/documents",
-  "/api/documents/[id]/route": "/api/documents/[id]",
-  "/api/documents/[id]/status/route": "/api/documents/[id]/status",
-  "/page": "/"
-}

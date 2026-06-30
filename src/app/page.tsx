@@ -8,7 +8,7 @@
  */
 
 import { buildMockDocumentBody, segmentContentForHighlights } from '@/lib/mockDocumentContent';
-import { formatConfidence, PII_TYPE_LABELS } from '@/lib/piiLabels';
+import { formatConfidence, PII_TYPE_COLORS, PII_TYPE_LABELS } from '@/lib/piiLabels';
 import type { Document, DocumentStatus, Redaction, RedactionStatus } from '@/types';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -107,7 +107,7 @@ function QueueItem({
 }
 
 /**
- * Center-panel span — black block when redacted, dashed red underline when overruled.
+ * Center-panel span — type-colored block when redacted, dashed type-colored underline when overruled.
  */
 function RedactionHighlight({
   redaction,
@@ -119,12 +119,13 @@ function RedactionHighlight({
   spanRef: (el: HTMLSpanElement | null) => void;
 }) {
   const isRedacted = redaction.status === 'approved';
+  const colors = PII_TYPE_COLORS[redaction.type];
 
   const styleClass = isRedacted
-    ? 'bg-black text-black select-none'
-    : 'text-zinc-300 underline decoration-red-500 decoration-dashed underline-offset-4';
+    ? `${colors.redactedBg} ${colors.redactedText} select-none`
+    : `${colors.visibleText} underline decoration-dashed underline-offset-4 ${colors.visibleUnderline}`;
 
-  const activeRing = isActive ? 'ring-2 ring-emerald-500 ring-offset-2 ring-offset-zinc-950' : '';
+  const activeRing = isActive ? 'ring-2 ring-emerald-400 ring-offset-2 ring-offset-zinc-950' : '';
 
   return (
     <span
@@ -142,12 +143,25 @@ function RedactionHighlight({
   );
 }
 
+/** Compact banner when the full queue is done — workspace stays open for revisits. */
+function QueueClearedBanner() {
+  return (
+    <div className="shrink-0 border-b border-emerald-500/30 bg-emerald-950/60 px-5 py-2 text-center">
+      <span className="text-sm font-bold text-emerald-400">Queue Cleared!</span>
+      <span className="ml-2 text-xs text-emerald-300/70">
+        All documents reviewed — use [ ] to browse or click any file in the queue
+      </span>
+    </div>
+  );
+}
+
 function DocumentViewer({
   title,
   content,
   redactions,
   status,
   isLoading,
+  isQueueCleared,
   activeRedactionId,
   scrollContainerRef,
   spanRefs,
@@ -157,6 +171,7 @@ function DocumentViewer({
   redactions: Redaction[];
   status: DocumentStatus | null;
   isLoading: boolean;
+  isQueueCleared: boolean;
   activeRedactionId: string | null;
   scrollContainerRef: React.RefObject<HTMLElement | null>;
   spanRefs: React.MutableRefObject<Map<string, HTMLSpanElement>>;
@@ -183,11 +198,12 @@ function DocumentViewer({
 
   return (
     <section className="col-span-6 flex min-h-0 flex-col border-x border-zinc-800 bg-zinc-950">
+      {isQueueCleared && <QueueClearedBanner />}
       <header className="flex shrink-0 items-center justify-between border-b border-zinc-800 px-5 py-3">
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold text-zinc-100">{title}</h1>
           <p className="mt-0.5 text-xs text-zinc-500">
-            Black blocks = redacted · dashed underline = kept visible
+            Colored blocks = redacted by type · dashed underline = kept visible
           </p>
         </div>
         <span className={`shrink-0 rounded px-2 py-1 text-xs font-medium ${statusBadgeClass}`}>
@@ -236,6 +252,7 @@ function RedactionCard({
 }) {
   const isRedacted = redaction.status === 'approved';
   const isRejected = redaction.status === 'rejected';
+  const colors = PII_TYPE_COLORS[redaction.type];
 
   return (
     <div
@@ -243,7 +260,7 @@ function RedactionCard({
       tabIndex={isActive ? 0 : -1}
       role="button"
       onClick={onActivate}
-      className={`rounded-md border p-3 transition-colors outline-none ${
+      className={`rounded-md border border-l-2 p-3 transition-colors outline-none ${colors.cardAccent} ${
         isActive
           ? 'border-emerald-500 ring-2 ring-emerald-500 bg-zinc-900'
           : 'border-zinc-800 bg-zinc-900/50 hover:border-zinc-700'
@@ -264,7 +281,9 @@ function RedactionCard({
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${colors.badgeBg} ${colors.badgeText}`}
+            >
               {PII_TYPE_LABELS[redaction.type]}
             </span>
             <span className="shrink-0 text-xs font-medium text-emerald-400">
@@ -344,7 +363,7 @@ function RedactionListPanel({
       <footer className="shrink-0 border-t border-zinc-800 px-4 py-2.5 text-xs text-zinc-500">
         <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">↑</kbd>
         <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">↓</kbd>{' '}
-        Navigate ·{' '}
+        Spans ·{' '}
         <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">Space</kbd>{' '}
         Toggle ·{' '}
         <button
@@ -358,22 +377,6 @@ function RedactionListPanel({
         <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">D</kbd>
       </footer>
     </aside>
-  );
-}
-
-function QueueClearedState({ total }: { total: number }) {
-  return (
-    <div className="col-span-9 flex flex-col items-center justify-center px-8 text-center">
-      <div className="mb-6 flex h-24 w-24 items-center justify-center rounded-full border-4 border-emerald-500/30 bg-emerald-500/10">
-        <span className="text-5xl" aria-hidden>
-          ✓
-        </span>
-      </div>
-      <h2 className="text-5xl font-extrabold tracking-tight text-emerald-400">Queue Cleared!</h2>
-      <p className="mt-4 max-w-md text-lg text-zinc-400">
-        All {total} documents reviewed. Safe to share with AI tools.
-      </p>
-    </div>
   );
 }
 
@@ -500,6 +503,27 @@ export default function ReviewDashboard() {
     [orderedRedactionIds, activeRedactionId, activateRedaction],
   );
 
+  /** Cycles through all documents in queue order — works even after queue is cleared. */
+  const navigateQueue = useCallback(
+    (direction: 'prev' | 'next') => {
+      if (documents.length === 0) return;
+
+      if (!selectedId) {
+        setSelectedId(documents[0].id);
+        return;
+      }
+
+      const currentIndex = documents.findIndex((doc) => doc.id === selectedId);
+      const nextIndex =
+        direction === 'next'
+          ? (currentIndex + 1) % documents.length
+          : (currentIndex - 1 + documents.length) % documents.length;
+
+      setSelectedId(documents[nextIndex].id);
+    },
+    [documents, selectedId],
+  );
+
   const toggleRedaction = useCallback(
     async (redactionId: string) => {
       if (!selectedId) return;
@@ -543,7 +567,7 @@ export default function ReviewDashboard() {
   );
 
   const finishDocument = useCallback(async () => {
-    if (!selectedId || isQueueCleared) return;
+    if (!selectedId) return;
 
     const currentId = selectedId;
 
@@ -558,21 +582,23 @@ export default function ReviewDashboard() {
       return;
     }
 
-    showToast('Document finished — advancing queue', 'success');
     const queue = await fetchQueue();
-
     const nextId = findNextPendingId(currentId, queue);
+
     if (nextId) {
+      showToast('Document finished — advancing queue', 'success');
       setSelectedId(nextId);
     } else if (countPending(queue) === 0) {
-      setSelectedId(null);
-      setDetail(null);
-      setRedactions([]);
+      showToast('Queue cleared!', 'success');
+      // Keep current document open so Maya can keep reviewing or browse with [ ]
     } else {
       const fallback = queue.find((doc) => doc.status === 'pending');
-      setSelectedId(fallback?.id ?? null);
+      if (fallback) {
+        showToast('Document finished — advancing queue', 'success');
+        setSelectedId(fallback.id);
+      }
     }
-  }, [selectedId, isQueueCleared, fetchQueue, showToast]);
+  }, [selectedId, fetchQueue, showToast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -581,7 +607,7 @@ export default function ReviewDashboard() {
       try {
         const queue = await fetchQueue();
         if (cancelled) return;
-        const firstPending = queue.find((doc) => doc.status === 'pending');
+        const firstPending = queue.find((doc) => doc.status === 'pending') ?? queue[0];
         if (firstPending) setSelectedId(firstPending.id);
       } catch {
         if (!cancelled) showToast('Could not load queue', 'warning');
@@ -595,13 +621,14 @@ export default function ReviewDashboard() {
     };
   }, [fetchQueue, showToast]);
 
+  /** Ensures a document is always selected when the queue has items. */
   useEffect(() => {
-    if (isQueueLoading || pendingCount === 0) return;
+    if (isQueueLoading || documents.length === 0) return;
     if (selectedId === null) {
-      const firstPending = documents.find((doc) => doc.status === 'pending');
-      if (firstPending) setSelectedId(firstPending.id);
+      const firstPending = documents.find((doc) => doc.status === 'pending') ?? documents[0];
+      setSelectedId(firstPending.id);
     }
-  }, [documents, selectedId, pendingCount, isQueueLoading]);
+  }, [documents, selectedId, isQueueLoading]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -644,7 +671,20 @@ export default function ReviewDashboard() {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
-      if (isQueueCleared || orderedRedactionIds.length === 0) return;
+
+      if (event.key === '[') {
+        event.preventDefault();
+        navigateQueue('prev');
+        return;
+      }
+
+      if (event.key === ']') {
+        event.preventDefault();
+        navigateQueue('next');
+        return;
+      }
+
+      if (orderedRedactionIds.length === 0) return;
 
       switch (event.key) {
         case 'ArrowUp':
@@ -676,11 +716,11 @@ export default function ReviewDashboard() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [
     navigateRedactionCard,
+    navigateQueue,
     toggleRedaction,
     finishDocument,
     activeRedactionId,
     orderedRedactionIds,
-    isQueueCleared,
   ]);
 
   const selectedDoc = documents.find((doc) => doc.id === selectedId) ?? null;
@@ -689,11 +729,10 @@ export default function ReviewDashboard() {
     detail?.content ??
     (selectedDoc ? buildMockDocumentBody(selectedDoc.title, redactions) : '');
 
-  const showWorkspace = !isQueueCleared && selectedId && selectedDoc;
+  const showWorkspace = selectedId && selectedDoc;
 
   return (
     <div className="grid h-screen grid-cols-12 bg-zinc-950">
-      {/* Left queue — 3 cols */}
       <aside className="col-span-3 flex min-h-0 flex-col border-r border-zinc-800 bg-zinc-950">
         <div className="shrink-0 border-b border-zinc-800 px-4 py-3">
           <div className="mb-3 flex items-center gap-2">
@@ -719,11 +758,15 @@ export default function ReviewDashboard() {
             ))
           )}
         </nav>
+
+        <footer className="shrink-0 border-t border-zinc-800 px-4 py-2 text-xs text-zinc-500">
+          <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">[</kbd>
+          <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">]</kbd>{' '}
+          Prev / next document
+        </footer>
       </aside>
 
-      {isQueueCleared ? (
-        <QueueClearedState total={totalCount} />
-      ) : showWorkspace ? (
+      {showWorkspace ? (
         <>
           <DocumentViewer
             title={selectedDoc.title}
@@ -731,6 +774,7 @@ export default function ReviewDashboard() {
             redactions={redactions}
             status={selectedDoc.status}
             isLoading={isDetailLoading}
+            isQueueCleared={isQueueCleared}
             activeRedactionId={activeRedactionId}
             scrollContainerRef={scrollContainerRef}
             spanRefs={spanRefs}
@@ -749,7 +793,7 @@ export default function ReviewDashboard() {
         </>
       ) : (
         <div className="col-span-9 flex items-center justify-center text-sm text-zinc-500">
-          Loading next document…
+          Loading document…
         </div>
       )}
 
