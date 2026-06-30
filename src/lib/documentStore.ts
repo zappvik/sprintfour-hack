@@ -1,16 +1,18 @@
 /**
  * @fileoverview In-memory mutable document store for the mock API layer.
  *
- * PATCH endpoints mutate this store so Maya's keyboard approvals persist across
- * requests within a dev session. Data resets on server restart — acceptable for
- * hackathon demo; production would write to a database.
+ * PATCH endpoints mutate documents and individual redaction spans so Maya's
+ * triage decisions persist across requests within a dev session.
  */
 
 import { MOCK_DOCUMENTS, MOCK_REDACTIONS } from '@/lib/mockData';
-import type { Document, DocumentStatus, Redaction } from '@/types';
+import type { Document, DocumentStatus, Redaction, RedactionStatus } from '@/types';
 
 /** Live copy of the queue; seeded from Phase 1 mock data on cold start. */
 let documents: Document[] = MOCK_DOCUMENTS.map((doc) => ({ ...doc }));
+
+/** Mutable redaction index — checkbox toggles in the right panel write here. */
+let redactions: Redaction[] = MOCK_REDACTIONS.map((r) => ({ ...r }));
 
 /**
  * Returns the full document queue in stable list order (Maya's sort key).
@@ -27,15 +29,14 @@ export function getDocumentById(id: string): Document | undefined {
 }
 
 /**
- * Returns redactions for a document. Redactions are static in Phase 2 — only
- * document-level status changes via PATCH.
+ * Returns live redactions for a document, including any triage edits.
  */
 export function getRedactionsForDocument(docId: string): Redaction[] {
-  return MOCK_REDACTIONS.filter((r) => r.docId === docId);
+  return redactions.filter((r) => r.docId === docId);
 }
 
 /**
- * Updates a document's workflow status after Maya approves or flags via keyboard.
+ * Updates a document's workflow status after Maya finishes reviewing a file.
  *
  * @returns Updated document, or `null` if id not found.
  */
@@ -45,6 +46,22 @@ export function updateDocumentStatus(id: string, status: DocumentStatus): Docume
 
   documents[index] = { ...documents[index], status };
   return documents[index];
+}
+
+/**
+ * Toggles a single PII span between redact (approved) and keep visible (rejected).
+ *
+ * @returns Updated redaction, or `null` if not found.
+ */
+export function updateRedactionStatus(
+  redactionId: string,
+  status: RedactionStatus,
+): Redaction | null {
+  const index = redactions.findIndex((r) => r.id === redactionId);
+  if (index === -1) return null;
+
+  redactions[index] = { ...redactions[index], status };
+  return redactions[index];
 }
 
 /**

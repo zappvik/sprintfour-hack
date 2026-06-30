@@ -1,15 +1,15 @@
 'use client';
 
 /**
- * @fileoverview Conseal bulk review dashboard — Maya's keyboard-first triage workspace.
+ * @fileoverview Conseal 3-pane triage dashboard — Queue | Document | Redaction List.
  *
- * Phase 3: roving Tab focus across PII spans, reliable auto-advance to the next
- * pending document, and a queue-cleared celebration only when the backlog is zero.
+ * Keyboard focus lives in the right panel. Up/Down roves cards; Space/Enter toggles
+ * redact vs keep visible; the center panel sync-scrolls to the active span.
  */
 
 import { buildMockDocumentBody, segmentContentForHighlights } from '@/lib/mockDocumentContent';
 import { formatConfidence, PII_TYPE_LABELS } from '@/lib/piiLabels';
-import type { Document, DocumentStatus, Redaction } from '@/types';
+import type { Document, DocumentStatus, Redaction, RedactionStatus } from '@/types';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 /** API envelope for GET /api/documents */
@@ -25,22 +25,16 @@ interface DocumentDetailResponse {
   content: string;
 }
 
-/** Ephemeral toast payload — auto-dismissed so Maya never clicks "OK". */
+/** Ephemeral toast payload */
 interface ToastState {
   message: string;
   tone: 'success' | 'warning';
 }
 
-/**
- * Counts documents still awaiting triage — the only progress number Maya needs.
- */
 function countPending(documents: Document[]): number {
   return documents.filter((doc) => doc.status === 'pending').length;
 }
 
-/**
- * Maps document status to a left-border accent color for sub-second visual parsing.
- */
 function statusAccentClass(status: DocumentStatus): string {
   switch (status) {
     case 'approved':
@@ -52,9 +46,6 @@ function statusAccentClass(status: DocumentStatus): string {
   }
 }
 
-/**
- * Compact status dot — supplements border color for color-blind accessibility.
- */
 function StatusDot({ status }: { status: DocumentStatus }) {
   const color =
     status === 'approved'
@@ -66,9 +57,6 @@ function StatusDot({ status }: { status: DocumentStatus }) {
   return <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${color}`} aria-hidden />;
 }
 
-/**
- * Queue progress header — Maya tracks backlog clearance without mental math.
- */
 function QueueProgress({ processed, total }: { processed: number; total: number }) {
   const percent = total === 0 ? 0 : Math.round((processed / total) * 100);
 
@@ -90,9 +78,6 @@ function QueueProgress({ processed, total }: { processed: number; total: number 
   );
 }
 
-/**
- * Left-panel queue row — single line title + confidence for density.
- */
 function QueueItem({
   document,
   isSelected,
@@ -122,85 +107,48 @@ function QueueItem({
 }
 
 /**
- * Center-panel PII span — keyboard-focusable with forced tooltip when focused.
- * Hover remains a fallback; Tab is the primary explainability path for Maya.
+ * Center-panel span — black block when redacted, dashed red underline when overruled.
  */
 function RedactionHighlight({
   redaction,
-  isFocused,
-  onFocus,
+  isActive,
   spanRef,
 }: {
   redaction: Redaction;
-  isFocused: boolean;
-  onFocus: () => void;
+  isActive: boolean;
   spanRef: (el: HTMLSpanElement | null) => void;
 }) {
-  const isApproved = redaction.status === 'approved';
-  const baseHighlight = isApproved
-    ? 'bg-amber-500/25 text-amber-100 ring-1 ring-amber-500/50'
-    : 'bg-zinc-700/40 text-zinc-300 ring-1 ring-dashed ring-zinc-500/60';
+  const isRedacted = redaction.status === 'approved';
 
-  // Distinct focus ring — must pop against dark slate without relying on mouse hover
-  const focusHighlight = isFocused
-    ? 'bg-sky-500/30 text-sky-50 ring-2 ring-sky-400 ring-offset-2 ring-offset-zinc-950'
-    : baseHighlight;
+  const styleClass = isRedacted
+    ? 'bg-black text-black select-none'
+    : 'text-zinc-300 underline decoration-red-500 decoration-dashed underline-offset-4';
 
-  const showTooltip = isFocused;
+  const activeRing = isActive ? 'ring-2 ring-emerald-500 ring-offset-2 ring-offset-zinc-950' : '';
 
   return (
     <span
       ref={spanRef}
-      tabIndex={isFocused ? 0 : -1}
-      onFocus={onFocus}
-      className={`relative rounded px-0.5 outline-none ${focusHighlight}`}
-      aria-label={`${PII_TYPE_LABELS[redaction.type]}, ${formatConfidence(redaction.confidence)} confidence`}
+      data-redaction-id={redaction.id}
+      className={`rounded-sm px-0.5 ${styleClass} ${activeRing}`}
+      aria-label={
+        isRedacted
+          ? `Redacted: ${PII_TYPE_LABELS[redaction.type]}`
+          : `Kept visible (overruled): ${PII_TYPE_LABELS[redaction.type]}`
+      }
     >
       {redaction.text}
-      {showTooltip && (
-        <span
-          role="tooltip"
-          className="pointer-events-none absolute bottom-full left-1/2 z-30 mb-2 w-max max-w-xs -translate-x-1/2 rounded-md border border-sky-500/40 bg-zinc-900 px-2.5 py-1.5 text-xs font-medium text-zinc-100 shadow-xl"
-        >
-          <span className="text-emerald-400">{formatConfidence(redaction.confidence)} Confidence</span>
-          <span className="text-zinc-500"> · </span>
-          {PII_TYPE_LABELS[redaction.type]}
-        </span>
-      )}
     </span>
   );
 }
 
-/**
- * Shown only when every document is approved or flagged — Maya's finish line.
- */
-function QueueClearedState({ total }: { total: number }) {
-  return (
-    <div className="flex flex-1 flex-col items-center justify-center px-8 text-center">
-      <div className="mb-6 flex h-24 w-24 items-center justify-center rounded-full border-4 border-emerald-500/30 bg-emerald-500/10">
-        <span className="text-5xl" aria-hidden>
-          ✓
-        </span>
-      </div>
-      <h2 className="text-5xl font-extrabold tracking-tight text-emerald-400">Queue Cleared!</h2>
-      <p className="mt-4 max-w-md text-lg text-zinc-400">
-        All {total} documents reviewed. Safe to share with AI tools.
-      </p>
-    </div>
-  );
-}
-
-/**
- * Main review surface — Tab roves across PII spans; article scrolls focused spans into view.
- */
 function DocumentViewer({
   title,
   content,
   redactions,
   status,
   isLoading,
-  focusedRedactionId,
-  onFocusedRedactionChange,
+  activeRedactionId,
   scrollContainerRef,
   spanRefs,
 }: {
@@ -209,8 +157,7 @@ function DocumentViewer({
   redactions: Redaction[];
   status: DocumentStatus | null;
   isLoading: boolean;
-  focusedRedactionId: string | null;
-  onFocusedRedactionChange: (id: string) => void;
+  activeRedactionId: string | null;
   scrollContainerRef: React.RefObject<HTMLElement | null>;
   spanRefs: React.MutableRefObject<Map<string, HTMLSpanElement>>;
 }) {
@@ -218,7 +165,7 @@ function DocumentViewer({
 
   if (isLoading) {
     return (
-      <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
+      <div className="col-span-6 flex items-center justify-center border-x border-zinc-800 text-sm text-zinc-500">
         Loading document…
       </div>
     );
@@ -235,12 +182,12 @@ function DocumentViewer({
         : 'bg-zinc-800 text-zinc-400';
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-6 py-3">
+    <section className="col-span-6 flex min-h-0 flex-col border-x border-zinc-800 bg-zinc-950">
+      <header className="flex shrink-0 items-center justify-between border-b border-zinc-800 px-5 py-3">
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold text-zinc-100">{title}</h1>
           <p className="mt-0.5 text-xs text-zinc-500">
-            {redactions.length} detected spans · Tab to inspect AI confidence
+            Black blocks = redacted · dashed underline = kept visible
           </p>
         </div>
         <span className={`shrink-0 rounded px-2 py-1 text-xs font-medium ${statusBadgeClass}`}>
@@ -248,7 +195,7 @@ function DocumentViewer({
         </span>
       </header>
 
-      <article ref={scrollContainerRef} className="flex-1 overflow-y-auto px-6 py-5">
+      <article ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-zinc-300">
           {segments.map((segment, index) =>
             segment.kind === 'text' ? (
@@ -257,8 +204,7 @@ function DocumentViewer({
               <RedactionHighlight
                 key={`redaction-${segment.redaction.id}`}
                 redaction={segment.redaction}
-                isFocused={focusedRedactionId === segment.redaction.id}
-                onFocus={() => onFocusedRedactionChange(segment.redaction.id)}
+                isActive={activeRedactionId === segment.redaction.id}
                 spanRef={(el) => {
                   if (el) spanRefs.current.set(segment.redaction.id, el);
                   else spanRefs.current.delete(segment.redaction.id);
@@ -268,26 +214,169 @@ function DocumentViewer({
           )}
         </pre>
       </article>
+    </section>
+  );
+}
 
-      <footer className="border-t border-zinc-800 px-6 py-2 text-xs text-zinc-500">
-        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">Tab</kbd>
-        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">Shift+Tab</kbd>{' '}
-        Span ·{' '}
-        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">Space</kbd>{' '}
-        Approve ·{' '}
-        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">F</kbd>{' '}
-        Flag ·{' '}
-        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">↑</kbd>
-        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">↓</kbd>{' '}
-        Queue
-      </footer>
+/**
+ * Right-panel triage card — checkbox drives redact vs keep-visible decision.
+ */
+function RedactionCard({
+  redaction,
+  isActive,
+  onActivate,
+  onToggle,
+  cardRef,
+}: {
+  redaction: Redaction;
+  isActive: boolean;
+  onActivate: () => void;
+  onToggle: () => void;
+  cardRef: (el: HTMLDivElement | null) => void;
+}) {
+  const isRedacted = redaction.status === 'approved';
+  const isRejected = redaction.status === 'rejected';
+
+  return (
+    <div
+      ref={cardRef}
+      tabIndex={isActive ? 0 : -1}
+      role="button"
+      onClick={onActivate}
+      className={`rounded-md border p-3 transition-colors outline-none ${
+        isActive
+          ? 'border-emerald-500 ring-2 ring-emerald-500 bg-zinc-900'
+          : 'border-zinc-800 bg-zinc-900/50 hover:border-zinc-700'
+      } ${isRejected ? 'opacity-50' : ''}`}
+      aria-pressed={isRedacted}
+    >
+      <div className="flex items-start gap-2.5">
+        <input
+          type="checkbox"
+          checked={isRedacted}
+          onChange={(event) => {
+            event.stopPropagation();
+            onToggle();
+          }}
+          onClick={(event) => event.stopPropagation()}
+          className="mt-0.5 h-4 w-4 shrink-0 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
+          aria-label={isRedacted ? 'Redact this span' : 'Keep this span visible'}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold uppercase tracking-wide text-zinc-400">
+              {PII_TYPE_LABELS[redaction.type]}
+            </span>
+            <span className="shrink-0 text-xs font-medium text-emerald-400">
+              {formatConfidence(redaction.confidence)}
+            </span>
+          </div>
+          <p
+            className={`mt-1.5 break-words text-sm text-zinc-200 ${
+              isRejected ? 'line-through decoration-zinc-500' : ''
+            }`}
+          >
+            {redaction.text}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
 
 /**
- * Non-blocking toast — confirms PATCH success without modal friction.
+ * Right panel — keyboard focus anchor; cards drive center-panel sync-scroll.
  */
+function RedactionListPanel({
+  redactions,
+  activeRedactionId,
+  onActivate,
+  onToggle,
+  onFinishDocument,
+  isLoading,
+  cardRefs,
+  panelRef,
+}: {
+  redactions: Redaction[];
+  activeRedactionId: string | null;
+  onActivate: (id: string) => void;
+  onToggle: (id: string) => void;
+  onFinishDocument: () => void;
+  isLoading: boolean;
+  cardRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
+  panelRef: React.RefObject<HTMLElement | null>;
+}) {
+  return (
+    <aside
+      ref={panelRef}
+      className="col-span-3 flex min-h-0 flex-col border-l border-zinc-800 bg-zinc-950"
+      aria-label="Redaction triage list"
+    >
+      <header className="shrink-0 border-b border-zinc-800 px-4 py-3">
+        <h2 className="text-sm font-semibold text-zinc-100">PII Spans</h2>
+        <p className="mt-0.5 text-xs text-zinc-500">{redactions.length} detected in document</p>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        {isLoading ? (
+          <p className="px-1 text-sm text-zinc-500">Loading spans…</p>
+        ) : redactions.length === 0 ? (
+          <p className="px-1 text-sm text-zinc-500">No PII spans in this document.</p>
+        ) : (
+          <div className="space-y-2">
+            {redactions.map((redaction) => (
+              <RedactionCard
+                key={redaction.id}
+                redaction={redaction}
+                isActive={activeRedactionId === redaction.id}
+                onActivate={() => onActivate(redaction.id)}
+                onToggle={() => onToggle(redaction.id)}
+                cardRef={(el) => {
+                  if (el) cardRefs.current.set(redaction.id, el);
+                  else cardRefs.current.delete(redaction.id);
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <footer className="shrink-0 border-t border-zinc-800 px-4 py-2.5 text-xs text-zinc-500">
+        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">↑</kbd>
+        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">↓</kbd>{' '}
+        Navigate ·{' '}
+        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">Space</kbd>{' '}
+        Toggle ·{' '}
+        <button
+          type="button"
+          onClick={onFinishDocument}
+          className="ml-1 rounded border border-emerald-600/40 bg-emerald-950/50 px-2 py-0.5 text-emerald-400 hover:bg-emerald-900/50"
+        >
+          Finish
+        </button>
+        <span className="ml-1 text-zinc-600">or</span>{' '}
+        <kbd className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-zinc-300">D</kbd>
+      </footer>
+    </aside>
+  );
+}
+
+function QueueClearedState({ total }: { total: number }) {
+  return (
+    <div className="col-span-9 flex flex-col items-center justify-center px-8 text-center">
+      <div className="mb-6 flex h-24 w-24 items-center justify-center rounded-full border-4 border-emerald-500/30 bg-emerald-500/10">
+        <span className="text-5xl" aria-hidden>
+          ✓
+        </span>
+      </div>
+      <h2 className="text-5xl font-extrabold tracking-tight text-emerald-400">Queue Cleared!</h2>
+      <p className="mt-4 max-w-md text-lg text-zinc-400">
+        All {total} documents reviewed. Safe to share with AI tools.
+      </p>
+    </div>
+  );
+}
+
 function Toast({ toast }: { toast: ToastState | null }) {
   if (!toast) return null;
 
@@ -306,10 +395,6 @@ function Toast({ toast }: { toast: ToastState | null }) {
   );
 }
 
-/**
- * Finds the next pending document in queue order, wrapping to the top when needed.
- * Called immediately after approve/flag so Maya never lands on an empty viewer mid-queue.
- */
 function findNextPendingId(currentId: string, queue: Document[]): string | null {
   const pending = queue.filter((doc) => doc.status === 'pending');
   if (pending.length === 0) return null;
@@ -327,35 +412,27 @@ function findNextPendingId(currentId: string, queue: Document[]): string | null 
   return null;
 }
 
-/**
- * Root dashboard — orchestrates API fetches, selection state, and global shortcuts.
- */
 export default function ReviewDashboard() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [processedCount, setProcessedCount] = useState(0);
   const [totalCount, setTotalCount] = useState(20);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DocumentDetailResponse | null>(null);
+  const [redactions, setRedactions] = useState<Redaction[]>([]);
   const [isQueueLoading, setIsQueueLoading] = useState(true);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [focusedRedactionId, setFocusedRedactionId] = useState<string | null>(null);
-  const viewerRef = useRef<HTMLElement>(null);
+  const [activeRedactionId, setActiveRedactionId] = useState<string | null>(null);
   const scrollContainerRef = useRef<HTMLElement>(null);
   const spanRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
+  const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const rightPanelRef = useRef<HTMLElement>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const pendingCount = useMemo(() => countPending(documents), [documents]);
   const isQueueCleared = !isQueueLoading && documents.length > 0 && pendingCount === 0;
 
-  /** Ordered PII span ids in document reading order — drives Tab roving. */
-  const orderedRedactionIds = useMemo(() => {
-    if (!detail) return [];
-    const segments = segmentContentForHighlights(detail.content, detail.redactions);
-    return segments
-      .filter((segment) => segment.kind === 'redaction')
-      .map((segment) => segment.redaction.id);
-  }, [detail]);
+  const orderedRedactionIds = useMemo(() => redactions.map((r) => r.id), [redactions]);
 
   const showToast = useCallback((message: string, tone: ToastState['tone']) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -380,46 +457,122 @@ export default function ReviewDashboard() {
       if (!response.ok) throw new Error('Failed to load document');
       const data: DocumentDetailResponse = await response.json();
       setDetail(data);
+      setRedactions(data.redactions);
+      const firstId = data.redactions[0]?.id ?? null;
+      setActiveRedactionId(firstId);
     } finally {
       setIsDetailLoading(false);
     }
   }, []);
 
-  /** Scrolls a focused span into the visible article area — no mouse wheel hunting. */
-  const focusRedactionSpan = useCallback(
-    (redactionId: string) => {
-      setFocusedRedactionId(redactionId);
+  /** Activates a card and sync-scrolls the matching center span into view. */
+  const activateRedaction = useCallback((redactionId: string) => {
+    setActiveRedactionId(redactionId);
 
-      requestAnimationFrame(() => {
-        const el = spanRefs.current.get(redactionId);
-        if (!el) return;
-        el.focus({ preventScroll: true });
-        el.scrollIntoView({ block: 'center', behavior: 'instant' });
-      });
-    },
-    [],
-  );
+    requestAnimationFrame(() => {
+      const card = cardRefs.current.get(redactionId);
+      card?.focus({ preventScroll: true });
 
-  /** Steps Tab / Shift+Tab across PII spans within the active document. */
-  const navigateRedactionSpan = useCallback(
-    (direction: 'next' | 'prev') => {
+      const span = spanRefs.current.get(redactionId);
+      span?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }, []);
+
+  const navigateRedactionCard = useCallback(
+    (direction: 'up' | 'down') => {
       if (orderedRedactionIds.length === 0) return;
 
-      const currentIndex = focusedRedactionId
-        ? orderedRedactionIds.indexOf(focusedRedactionId)
+      const currentIndex = activeRedactionId
+        ? orderedRedactionIds.indexOf(activeRedactionId)
         : -1;
 
       let nextIndex: number;
-      if (direction === 'next') {
-        nextIndex = currentIndex < orderedRedactionIds.length - 1 ? currentIndex + 1 : 0;
+      if (direction === 'down') {
+        nextIndex =
+          currentIndex < orderedRedactionIds.length - 1 ? currentIndex + 1 : 0;
       } else {
-        nextIndex = currentIndex > 0 ? currentIndex - 1 : orderedRedactionIds.length - 1;
+        nextIndex =
+          currentIndex > 0 ? currentIndex - 1 : orderedRedactionIds.length - 1;
       }
 
-      focusRedactionSpan(orderedRedactionIds[nextIndex]);
+      activateRedaction(orderedRedactionIds[nextIndex]);
     },
-    [orderedRedactionIds, focusedRedactionId, focusRedactionSpan],
+    [orderedRedactionIds, activeRedactionId, activateRedaction],
   );
+
+  const toggleRedaction = useCallback(
+    async (redactionId: string) => {
+      if (!selectedId) return;
+
+      const current = redactions.find((r) => r.id === redactionId);
+      if (!current) return;
+
+      const nextStatus: RedactionStatus =
+        current.status === 'approved' ? 'rejected' : 'approved';
+
+      const response = await fetch(
+        `/api/documents/${selectedId}/redactions/${redactionId}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: nextStatus }),
+        },
+      );
+
+      if (!response.ok) {
+        showToast('Could not update span', 'warning');
+        return;
+      }
+
+      const data: { redaction: Redaction } = await response.json();
+      setRedactions((prev) =>
+        prev.map((r) => (r.id === redactionId ? data.redaction : r)),
+      );
+      setDetail((prev) =>
+        prev
+          ? {
+              ...prev,
+              redactions: prev.redactions.map((r) =>
+                r.id === redactionId ? data.redaction : r,
+              ),
+            }
+          : prev,
+      );
+    },
+    [selectedId, redactions, showToast],
+  );
+
+  const finishDocument = useCallback(async () => {
+    if (!selectedId || isQueueCleared) return;
+
+    const currentId = selectedId;
+
+    const response = await fetch(`/api/documents/${currentId}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'approved' }),
+    });
+
+    if (!response.ok) {
+      showToast('Could not finish document', 'warning');
+      return;
+    }
+
+    showToast('Document finished — advancing queue', 'success');
+    const queue = await fetchQueue();
+
+    const nextId = findNextPendingId(currentId, queue);
+    if (nextId) {
+      setSelectedId(nextId);
+    } else if (countPending(queue) === 0) {
+      setSelectedId(null);
+      setDetail(null);
+      setRedactions([]);
+    } else {
+      const fallback = queue.find((doc) => doc.status === 'pending');
+      setSelectedId(fallback?.id ?? null);
+    }
+  }, [selectedId, isQueueCleared, fetchQueue, showToast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -442,10 +595,6 @@ export default function ReviewDashboard() {
     };
   }, [fetchQueue, showToast]);
 
-  /**
-   * Safety net: if pending docs exist but selection is null (edge race after PATCH),
-   * immediately load the first pending — never show an empty viewer mid-queue.
-   */
   useEffect(() => {
     if (isQueueLoading || pendingCount === 0) return;
     if (selectedId === null) {
@@ -457,95 +606,66 @@ export default function ReviewDashboard() {
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
-      setFocusedRedactionId(null);
+      setRedactions([]);
+      setActiveRedactionId(null);
       spanRefs.current.clear();
+      cardRefs.current.clear();
       return;
     }
-    setFocusedRedactionId(null);
     spanRefs.current.clear();
+    cardRefs.current.clear();
     fetchDocumentDetail(selectedId);
   }, [selectedId, fetchDocumentDetail]);
 
+  /** Sync-scroll center span whenever the active right-panel card changes. */
   useEffect(() => {
-    if (!isQueueCleared) {
-      viewerRef.current?.focus();
-    }
-  }, [selectedId, detail, isQueueCleared]);
+    if (!activeRedactionId || isDetailLoading) return;
 
-  const updateStatus = useCallback(
-    async (status: DocumentStatus, toastMessage: string, tone: ToastState['tone']) => {
-      if (!selectedId || isQueueCleared) return;
+    requestAnimationFrame(() => {
+      const span = spanRefs.current.get(activeRedactionId);
+      span?.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-      const currentId = selectedId;
+      const card = cardRefs.current.get(activeRedactionId);
+      card?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      card?.focus({ preventScroll: true });
+    });
+  }, [activeRedactionId, isDetailLoading]);
 
-      const response = await fetch(`/api/documents/${currentId}/status`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
+  /** Focus the right panel when a document loads — keyboard home base for Maya. */
+  useEffect(() => {
+    if (!isDetailLoading && redactions.length > 0 && activeRedactionId) {
+      requestAnimationFrame(() => {
+        cardRefs.current.get(activeRedactionId)?.focus({ preventScroll: true });
       });
-
-      if (!response.ok) {
-        showToast('Update failed — try again', 'warning');
-        return;
-      }
-
-      showToast(toastMessage, tone);
-      const queue = await fetchQueue();
-
-      const nextId = findNextPendingId(currentId, queue);
-      if (nextId) {
-        setSelectedId(nextId);
-      } else if (countPending(queue) === 0) {
-        setSelectedId(null);
-        setDetail(null);
-      } else {
-        const fallback = queue.find((doc) => doc.status === 'pending');
-        setSelectedId(fallback?.id ?? null);
-      }
-    },
-    [selectedId, isQueueCleared, fetchQueue, showToast],
-  );
-
-  const navigateQueue = useCallback(
-    (direction: 'up' | 'down') => {
-      if (documents.length === 0 || !selectedId) return;
-
-      const currentIndex = documents.findIndex((doc) => doc.id === selectedId);
-      const delta = direction === 'up' ? -1 : 1;
-      const nextIndex = Math.min(Math.max(currentIndex + delta, 0), documents.length - 1);
-      setSelectedId(documents[nextIndex].id);
-    },
-    [documents, selectedId],
-  );
+    }
+  }, [isDetailLoading, redactions.length, activeRedactionId, selectedId]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
-
-      if (event.key === 'Tab' && !isQueueCleared && orderedRedactionIds.length > 0) {
-        event.preventDefault();
-        navigateRedactionSpan(event.shiftKey ? 'prev' : 'next');
-        return;
-      }
+      if (isQueueCleared || orderedRedactionIds.length === 0) return;
 
       switch (event.key) {
-        case ' ':
-          event.preventDefault();
-          updateStatus('approved', 'Document approved', 'success');
-          break;
-        case 'f':
-        case 'F':
-          event.preventDefault();
-          updateStatus('flagged', 'Document flagged for review', 'warning');
-          break;
         case 'ArrowUp':
           event.preventDefault();
-          navigateQueue('up');
+          navigateRedactionCard('up');
           break;
         case 'ArrowDown':
           event.preventDefault();
-          navigateQueue('down');
+          navigateRedactionCard('down');
+          break;
+        case ' ':
+        case 'Enter':
+          if (activeRedactionId) {
+            event.preventDefault();
+            toggleRedaction(activeRedactionId);
+          }
+          break;
+        case 'd':
+        case 'D':
+          event.preventDefault();
+          finishDocument();
           break;
         default:
           break;
@@ -554,20 +674,28 @@ export default function ReviewDashboard() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [updateStatus, navigateQueue, navigateRedactionSpan, orderedRedactionIds, isQueueCleared]);
+  }, [
+    navigateRedactionCard,
+    toggleRedaction,
+    finishDocument,
+    activeRedactionId,
+    orderedRedactionIds,
+    isQueueCleared,
+  ]);
 
   const selectedDoc = documents.find((doc) => doc.id === selectedId) ?? null;
 
   const viewerContent =
     detail?.content ??
-    (selectedDoc ? buildMockDocumentBody(selectedDoc.title, detail?.redactions ?? []) : '');
+    (selectedDoc ? buildMockDocumentBody(selectedDoc.title, redactions) : '');
 
-  const showDocumentViewer = !isQueueCleared && selectedId && selectedDoc;
+  const showWorkspace = !isQueueCleared && selectedId && selectedDoc;
 
   return (
-    <div className="flex h-screen bg-zinc-950">
-      <aside className="flex w-80 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950">
-        <div className="border-b border-zinc-800 px-4 py-3">
+    <div className="grid h-screen grid-cols-12 bg-zinc-950">
+      {/* Left queue — 3 cols */}
+      <aside className="col-span-3 flex min-h-0 flex-col border-r border-zinc-800 bg-zinc-950">
+        <div className="shrink-0 border-b border-zinc-800 px-4 py-3">
           <div className="mb-3 flex items-center gap-2">
             <span className="text-sm font-bold tracking-tight text-zinc-100">Conseal</span>
             <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium uppercase text-zinc-400">
@@ -577,7 +705,7 @@ export default function ReviewDashboard() {
           <QueueProgress processed={processedCount} total={totalCount} />
         </div>
 
-        <nav className="flex-1 overflow-y-auto" aria-label="Document queue">
+        <nav className="min-h-0 flex-1 overflow-y-auto" aria-label="Document queue">
           {isQueueLoading ? (
             <p className="px-4 py-3 text-sm text-zinc-500">Loading queue…</p>
           ) : (
@@ -593,32 +721,37 @@ export default function ReviewDashboard() {
         </nav>
       </aside>
 
-      <main
-        ref={viewerRef}
-        tabIndex={isQueueCleared ? -1 : 0}
-        className="flex flex-1 flex-col outline-none focus:ring-1 focus:ring-inset focus:ring-zinc-700"
-        aria-label="Document review viewer"
-      >
-        {isQueueCleared ? (
-          <QueueClearedState total={totalCount} />
-        ) : showDocumentViewer ? (
+      {isQueueCleared ? (
+        <QueueClearedState total={totalCount} />
+      ) : showWorkspace ? (
+        <>
           <DocumentViewer
             title={selectedDoc.title}
             content={viewerContent}
-            redactions={detail?.redactions ?? []}
+            redactions={redactions}
             status={selectedDoc.status}
             isLoading={isDetailLoading}
-            focusedRedactionId={focusedRedactionId}
-            onFocusedRedactionChange={setFocusedRedactionId}
+            activeRedactionId={activeRedactionId}
             scrollContainerRef={scrollContainerRef}
             spanRefs={spanRefs}
           />
-        ) : (
-          <div className="flex flex-1 items-center justify-center text-sm text-zinc-500">
-            Loading next document…
-          </div>
-        )}
-      </main>
+
+          <RedactionListPanel
+            redactions={redactions}
+            activeRedactionId={activeRedactionId}
+            onActivate={activateRedaction}
+            onToggle={toggleRedaction}
+            onFinishDocument={finishDocument}
+            isLoading={isDetailLoading}
+            cardRefs={cardRefs}
+            panelRef={rightPanelRef}
+          />
+        </>
+      ) : (
+        <div className="col-span-9 flex items-center justify-center text-sm text-zinc-500">
+          Loading next document…
+        </div>
+      )}
 
       <Toast toast={toast} />
     </div>
