@@ -1,16 +1,26 @@
 'use client';
 
 /**
- * @fileoverview Conseal 3-pane triage dashboard — Queue | Document | Redaction List.
+ * @fileoverview Conseal 3-pane bulk anonymization workstation — Queue | Document | PII List.
  *
- * Keyboard focus lives in the right panel. Up/Down roves cards; Space/Enter toggles
- * redact vs keep visible; the center panel sync-scrolls to the active span.
+ * Maya's goal is anonymizing high-volume case files: review spans fast, preview safe
+ * output, and advance through the queue without leaving the keyboard.
  */
 
+import { buildAnonymizedOutput, countAnonymizedSpans } from '@/lib/anonymizeOutput';
 import { buildMockDocumentBody, segmentContentForHighlights } from '@/lib/mockDocumentContent';
 import { formatConfidence, PII_TYPE_LABELS } from '@/lib/piiLabels';
+import { MOCK_DOCUMENTS, MOCK_REDACTIONS } from '@/lib/mockData';
+import {
+  getDocumentDetail,
+  listDocuments,
+  seedSidecar,
+  sidecarHealthCheck,
+  updateDocumentStatus,
+  updateRedactionStatus,
+} from '@/lib/sidecarClient';
 import type { Document, DocumentStatus, Redaction, RedactionStatus } from '@/types';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 /** API envelope for GET /api/documents */
 interface DocumentsResponse {
@@ -24,11 +34,33 @@ interface DocumentDetailResponse {
   content: string;
 }
 
+interface SidecarSeedDocument {
+  id: string;
+  title: string;
+  character_count: number;
+  total_redactions: number;
+  confidence_score: number;
+  status: DocumentStatus;
+  content: string;
+  redactions: Array<{
+    id: string;
+    kind: string;
+    confidence: number;
+    original: string;
+    start: number;
+    end: number;
+    status: RedactionStatus;
+  }>;
+}
+
 /** Ephemeral toast payload */
 interface ToastState {
   message: string;
   tone: 'success' | 'warning';
 }
+
+/** Center panel display mode — original source vs anonymized output preview */
+type ViewMode = 'original' | 'anonymized';
 
 function countPending(documents: Document[]): number {
   return documents.filter((doc) => doc.status === 'pending').length;
@@ -41,6 +73,40 @@ function statusAccentClass(status: DocumentStatus): string {
     default:
       return 'border-l-zinc-600';
   }
+}
+
+/**
+ * Surfaces Maya's end-of-day pressure: how many files are left vs anonymized.
+ */
+function QueueThroughput({ total, remaining, anonymized }: { total: number; remaining: number; anonymized: number }) {
+  return (
+    <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-xs">
+      <p className="font-medium text-zinc-300">{remaining} remaining · {anonymized} anonymized</p>
+      <p className="mt-0.5 text-zinc-500">{total} case files in queue</p>
+    </div>
+  );
+}
+
+/** Shown when the local Python sidecar is not running. */
+function SidecarOfflineBanner({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="col-span-9 flex flex-col items-center justify-center gap-3 border-x border-zinc-800 px-8 text-center">
+      <p className="text-sm font-semibold text-amber-300">Local anonymizer sidecar is offline</p>
+      <p className="max-w-md text-xs text-zinc-400">
+        Start it with:{' '}
+        <code className="rounded bg-zinc-900 px-1.5 py-0.5 text-zinc-200">
+          python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+        </code>
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="rounded border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+      >
+        Retry connection
+      </button>
+    </div>
+  );
 }
 
 function StatusDot({ status }: { status: DocumentStatus }) {
@@ -83,8 +149,25 @@ function QueueItem({
   );
 }
 
+/** Highlights replacement tokens in anonymized output preview. */
+function AnonymizedToken({ token }: { token: string }) {
+  return (
+    <span className="rounded bg-emerald-700/80 px-1 font-semibold text-emerald-100">{token}</span>
+  );
+}
+
+function renderAnonymizedPreview(text: string): ReactNode[] {
+  return text.split(/(\[PII_TOKEN_\d{2}\])/).map((part, index) =>
+    /^\[PII_TOKEN_\d{2}\]$/.test(part) ? (
+      <AnonymizedToken key={`token-${index}`} token={part} />
+    ) : (
+      <span key={`text-${index}`}>{part}</span>
+    ),
+  );
+}
+
 /**
- * Center-panel span — consistent defer styling for clear, fast scanning.
+ * Center-panel span — green strikethrough = marked for anonymization.
  */
 function RedactionHighlight({
   redaction,
@@ -95,8 +178,8 @@ function RedactionHighlight({
   isActive: boolean;
   spanRef: (el: HTMLSpanElement | null) => void;
 }) {
-  const isDeferred = redaction.status === 'approved';
-  const styleClass = isDeferred
+  const isAnonymized = redaction.status === 'approved';
+  const styleClass = isAnonymized
     ? 'bg-emerald-600/35 text-emerald-100 font-semibold line-through decoration-emerald-300/80 shadow-sm'
     : 'text-zinc-300 underline decoration-zinc-500 decoration-dashed underline-offset-4';
 
@@ -108,9 +191,9 @@ function RedactionHighlight({
       data-redaction-id={redaction.id}
       className={`rounded-sm px-0.5 ${styleClass} ${activeRing}`}
       aria-label={
-        isDeferred
-          ? `Deferred: ${PII_TYPE_LABELS[redaction.type]}`
-          : `Kept visible (overruled): ${PII_TYPE_LABELS[redaction.type]}`
+        isAnonymized
+          ? `Anonymize: ${PII_TYPE_LABELS[redaction.type]}`
+          : `Keep visible: ${PII_TYPE_LABELS[redaction.type]}`
       }
     >
       {redaction.text}
@@ -122,9 +205,9 @@ function RedactionHighlight({
 function QueueClearedBanner() {
   return (
     <div className="shrink-0 border-b border-emerald-500/30 bg-emerald-950/60 px-5 py-2 text-center">
-      <span className="text-sm font-bold text-emerald-400">Queue Cleared!</span>
+      <span className="text-sm font-bold text-emerald-400">Queue Anonymized!</span>
       <span className="ml-2 text-xs text-emerald-300/70">
-        All documents reviewed — use [ ] to browse or click any file in the queue
+        All case files processed — use [ ] to browse or click any file in the queue
       </span>
     </div>
   );
@@ -133,25 +216,36 @@ function QueueClearedBanner() {
 function DocumentViewer({
   title,
   content,
+  anonymizedContent,
   redactions,
   status,
   isLoading,
   isQueueCleared,
+  viewMode,
+  onViewModeChange,
+  onCopyAnonymized,
+  onDownloadAnonymized,
   activeRedactionId,
   scrollContainerRef,
   spanRefs,
 }: {
   title: string;
   content: string;
+  anonymizedContent: string;
   redactions: Redaction[];
   status: DocumentStatus | null;
   isLoading: boolean;
   isQueueCleared: boolean;
+  viewMode: ViewMode;
+  onViewModeChange: (mode: ViewMode) => void;
+  onCopyAnonymized: () => void;
+  onDownloadAnonymized: () => void;
   activeRedactionId: string | null;
   scrollContainerRef: React.RefObject<HTMLElement | null>;
   spanRefs: React.MutableRefObject<Map<string, HTMLSpanElement>>;
 }) {
   const segments = segmentContentForHighlights(content, redactions);
+  const anonymizedSpanCount = countAnonymizedSpans(redactions);
 
   if (isLoading) {
     return (
@@ -162,7 +256,7 @@ function DocumentViewer({
   }
 
   const statusLabel =
-    status === 'approved' ? 'Approved' : 'Pending review';
+    status === 'approved' ? 'Anonymized' : 'Pending review';
 
   const statusBadgeClass =
     status === 'approved'
@@ -172,35 +266,75 @@ function DocumentViewer({
   return (
     <section className="col-span-6 flex min-h-0 flex-col border-x border-zinc-800 bg-zinc-950">
       {isQueueCleared && <QueueClearedBanner />}
-      <header className="flex shrink-0 items-center justify-between border-b border-zinc-800 px-5 py-3">
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-zinc-800 px-5 py-3">
         <div className="min-w-0">
           <h1 className="truncate text-base font-semibold text-zinc-100">{title}</h1>
           <p className="mt-0.5 text-xs text-zinc-500">
-            Green strikethrough = deferred · dashed underline = keep visible
+            {viewMode === 'original'
+              ? 'Green strikethrough = anonymize · dashed underline = keep visible'
+              : `${anonymizedSpanCount} spans replaced with safe tokens`}
           </p>
         </div>
-        <span className={`shrink-0 rounded px-2 py-1 text-xs font-medium ${statusBadgeClass}`}>
-          {statusLabel}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <div className="flex rounded border border-zinc-700 text-xs">
+            <button
+              type="button"
+              onClick={() => onViewModeChange('original')}
+              className={`px-2 py-1 ${viewMode === 'original' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400'}`}
+            >
+              Original (O)
+            </button>
+            <button
+              type="button"
+              onClick={() => onViewModeChange('anonymized')}
+              className={`px-2 py-1 ${viewMode === 'anonymized' ? 'bg-emerald-900/50 text-emerald-300' : 'text-zinc-400'}`}
+            >
+              Anonymized (A)
+            </button>
+          </div>
+          <span className={`rounded px-2 py-1 text-xs font-medium ${statusBadgeClass}`}>
+            {statusLabel}
+          </span>
+          {viewMode === 'anonymized' && (
+            <>
+              <button
+                type="button"
+                onClick={onCopyAnonymized}
+                className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
+              >
+                Copy safe output
+              </button>
+              <button
+                type="button"
+                onClick={onDownloadAnonymized}
+                className="rounded border border-emerald-700/50 bg-emerald-950/40 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-900/40"
+              >
+                Download .txt
+              </button>
+            </>
+          )}
+        </div>
       </header>
 
       <article ref={scrollContainerRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed text-zinc-300">
-          {segments.map((segment, index) =>
-            segment.kind === 'text' ? (
-              <span key={`text-${index}`}>{segment.value}</span>
-            ) : (
-              <RedactionHighlight
-                key={`redaction-${segment.redaction.id}`}
-                redaction={segment.redaction}
-                isActive={activeRedactionId === segment.redaction.id}
-                spanRef={(el) => {
-                  if (el) spanRefs.current.set(segment.redaction.id, el);
-                  else spanRefs.current.delete(segment.redaction.id);
-                }}
-              />
-            ),
-          )}
+          {viewMode === 'original'
+            ? segments.map((segment, index) =>
+                segment.kind === 'text' ? (
+                  <span key={`text-${index}`}>{segment.value}</span>
+                ) : (
+                  <RedactionHighlight
+                    key={`redaction-${segment.redaction.id}`}
+                    redaction={segment.redaction}
+                    isActive={activeRedactionId === segment.redaction.id}
+                    spanRef={(el) => {
+                      if (el) spanRefs.current.set(segment.redaction.id, el);
+                      else spanRefs.current.delete(segment.redaction.id);
+                    }}
+                  />
+                ),
+              )
+            : renderAnonymizedPreview(anonymizedContent)}
         </pre>
       </article>
     </section>
@@ -208,7 +342,7 @@ function DocumentViewer({
 }
 
 /**
- * Right-panel triage card — checkbox drives defer vs keep-visible decision.
+ * Right-panel triage card — checkbox marks span for anonymization in output.
  */
 function RedactionCard({
   redaction,
@@ -223,7 +357,7 @@ function RedactionCard({
   onToggle: () => void;
   cardRef: (el: HTMLDivElement | null) => void;
 }) {
-  const isDeferred = redaction.status === 'approved';
+  const isAnonymized = redaction.status === 'approved';
   const isRejected = redaction.status === 'rejected';
 
   return (
@@ -237,19 +371,19 @@ function RedactionCard({
           ? 'border-emerald-500 ring-2 ring-emerald-500 bg-zinc-900'
           : 'border-zinc-800 bg-zinc-900/50 hover:border-zinc-700'
       } ${isRejected ? 'opacity-50' : ''}`}
-      aria-pressed={isDeferred}
+      aria-pressed={isAnonymized}
     >
       <div className="flex items-start gap-2.5">
         <input
           type="checkbox"
-          checked={isDeferred}
+          checked={isAnonymized}
           onChange={(event) => {
             event.stopPropagation();
             onToggle();
           }}
           onClick={(event) => event.stopPropagation()}
           className="mt-0.5 h-4 w-4 shrink-0 rounded border-zinc-600 bg-zinc-800 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-zinc-950"
-          aria-label={isDeferred ? 'Defer this span' : 'Keep this span visible'}
+          aria-label={isAnonymized ? 'Anonymize this span' : 'Keep this span visible'}
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
@@ -281,8 +415,8 @@ function RedactionListPanel({
   activeRedactionId,
   onActivate,
   onToggle,
-  onDeferSelected,
-  onUndoDeferrals,
+  onAnonymizeAndContinue,
+  onUndoAnonymizations,
   isLoading,
   cardRefs,
   panelRef,
@@ -291,8 +425,8 @@ function RedactionListPanel({
   activeRedactionId: string | null;
   onActivate: (id: string) => void;
   onToggle: (id: string) => void;
-  onDeferSelected: () => void;
-  onUndoDeferrals: () => void;
+  onAnonymizeAndContinue: () => void;
+  onUndoAnonymizations: () => void;
   isLoading: boolean;
   cardRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
   panelRef: React.RefObject<HTMLElement | null>;
@@ -307,7 +441,10 @@ function RedactionListPanel({
         <h2 className="text-sm font-semibold text-zinc-100">PII Spans</h2>
         <p className="mt-0.5 text-xs text-zinc-500">{redactions.length} detected in document</p>
         <p className="mt-1 text-[11px] text-zinc-400">
-          Checked = Defer in output · Unchecked = Keep visible
+          Checked = Anonymize in output · Unchecked = Keep visible
+        </p>
+        <p className="mt-1 text-[11px] text-emerald-400/80">
+          {countAnonymizedSpans(redactions)} spans marked for replacement
         </p>
       </header>
 
@@ -343,17 +480,17 @@ function RedactionListPanel({
         Toggle ·{' '}
         <button
           type="button"
-          onClick={onDeferSelected}
+          onClick={onAnonymizeAndContinue}
           className="ml-1 rounded border border-emerald-600/40 bg-emerald-950/50 px-2 py-0.5 text-emerald-400 hover:bg-emerald-900/50"
         >
-          Defer selected (D)
+          Anonymize &amp; next (D)
         </button>
         <button
           type="button"
-          onClick={onUndoDeferrals}
+          onClick={onUndoAnonymizations}
           className="ml-1 rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-zinc-300 hover:bg-zinc-800"
         >
-          Undo deferrals (U)
+          Undo anonymizations (U)
         </button>
       </footer>
     </aside>
@@ -395,6 +532,59 @@ function findNextPendingId(currentId: string, queue: Document[]): string | null 
   return null;
 }
 
+/**
+ * Converts existing UI redaction types into backend detector-like kinds for seeding.
+ */
+function mapPiiTypeToKind(type: Redaction['type']): string {
+  switch (type) {
+    case 'SSN':
+      return 'ssn';
+    case 'EMAIL':
+      return 'email';
+    case 'ACCOUNT_NUMBER':
+    case 'CREDIT_CARD':
+    case 'DRIVERS_LICENSE':
+      return 'api_key';
+    default:
+      return 'secret_heuristic';
+  }
+}
+
+/**
+ * Prepares sidecar seed documents from the current mock queue and redaction set.
+ */
+function buildSidecarSeedDocuments(): SidecarSeedDocument[] {
+  return MOCK_DOCUMENTS.map((document) => {
+    const redactions = MOCK_REDACTIONS.filter((redaction) => redaction.docId === document.id);
+    const content = buildMockDocumentBody(document.title, redactions);
+
+    const seededRedactions = redactions.map((redaction) => {
+      const start = content.indexOf(redaction.text);
+      const end = start < 0 ? -1 : start + redaction.text.length;
+      return {
+        id: redaction.id,
+        kind: mapPiiTypeToKind(redaction.type),
+        confidence: redaction.confidence,
+        original: redaction.text,
+        start,
+        end,
+        status: redaction.status,
+      };
+    });
+
+    return {
+      id: document.id,
+      title: document.title,
+      character_count: document.characterCount,
+      total_redactions: document.totalRedactions,
+      confidence_score: document.confidenceScore,
+      status: document.status,
+      content,
+      redactions: seededRedactions,
+    };
+  });
+}
+
 export default function ReviewDashboard() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -404,6 +594,8 @@ export default function ReviewDashboard() {
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [activeRedactionId, setActiveRedactionId] = useState<string | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('original');
+  const [sidecarOffline, setSidecarOffline] = useState(false);
   const scrollContainerRef = useRef<HTMLElement>(null);
   const spanRefs = useRef<Map<string, HTMLSpanElement>>(new Map());
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -412,6 +604,10 @@ export default function ReviewDashboard() {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const pendingCount = useMemo(() => countPending(documents), [documents]);
+  const anonymizedCount = useMemo(
+    () => documents.filter((doc) => doc.status === 'approved').length,
+    [documents],
+  );
   const isQueueCleared = !isQueueLoading && documents.length > 0 && pendingCount === 0;
 
   const orderedRedactionIds = useMemo(() => redactions.map((r) => r.id), [redactions]);
@@ -423,19 +619,39 @@ export default function ReviewDashboard() {
   }, []);
 
   const fetchQueue = useCallback(async (): Promise<Document[]> => {
-    const response = await fetch('/api/documents');
-    if (!response.ok) throw new Error('Failed to load document queue');
-    const data: DocumentsResponse = await response.json();
-    setDocuments(data.documents);
-    return data.documents;
+    const documents = await listDocuments();
+    setDocuments(documents);
+    setSidecarOffline(false);
+    return documents;
   }, []);
+
+  const retrySidecarConnection = useCallback(async () => {
+    setIsQueueLoading(true);
+    setSidecarOffline(false);
+    try {
+      const healthy = await sidecarHealthCheck();
+      if (!healthy) throw new Error('Sidecar is not reachable');
+
+      const existing = await listDocuments();
+      if (existing.length === 0) {
+        await seedSidecar(buildSidecarSeedDocuments());
+      }
+
+      const queue = await fetchQueue();
+      const firstPending = queue.find((doc) => doc.status === 'pending') ?? queue[0];
+      if (firstPending) setSelectedId(firstPending.id);
+    } catch {
+      setSidecarOffline(true);
+      showToast('Sidecar still offline', 'warning');
+    } finally {
+      setIsQueueLoading(false);
+    }
+  }, [fetchQueue, showToast]);
 
   const fetchDocumentDetail = useCallback(async (id: string) => {
     setIsDetailLoading(true);
     try {
-      const response = await fetch(`/api/documents/${id}`);
-      if (!response.ok) throw new Error('Failed to load document');
-      const data: DocumentDetailResponse = await response.json();
+      const data: DocumentDetailResponse = await getDocumentDetail(id);
       setDetail(data);
       setRedactions(data.redactions);
       const firstId = data.redactions[0]?.id ?? null;
@@ -511,100 +727,84 @@ export default function ReviewDashboard() {
       const nextStatus: RedactionStatus =
         current.status === 'approved' ? 'rejected' : 'approved';
 
-      const response = await fetch(
-        `/api/documents/${selectedId}/redactions/${redactionId}`,
-        {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ status: nextStatus }),
-        },
-      );
-
-      if (!response.ok) {
+      try {
+        const persistedStatus = await updateRedactionStatus(selectedId, redactionId, nextStatus);
+        setRedactions((prev) =>
+          prev.map((r) =>
+            r.id === redactionId ? { ...r, status: persistedStatus } : r,
+          ),
+        );
+        setDetail((prev) =>
+          prev
+            ? {
+                ...prev,
+                redactions: prev.redactions.map((r) =>
+                  r.id === redactionId ? { ...r, status: persistedStatus } : r,
+                ),
+              }
+            : prev,
+        );
+      } catch {
         showToast('Could not update span', 'warning');
-        return;
       }
-
-      const data: { redaction: Redaction } = await response.json();
-      setRedactions((prev) =>
-        prev.map((r) => (r.id === redactionId ? data.redaction : r)),
-      );
-      setDetail((prev) =>
-        prev
-          ? {
-              ...prev,
-              redactions: prev.redactions.map((r) =>
-                r.id === redactionId ? data.redaction : r,
-              ),
-            }
-          : prev,
-      );
     },
     [selectedId, redactions, showToast],
   );
 
   /**
-   * Clears all current-document deferrals in one action so Maya can restart triage fast.
+   * Clears all current-document anonymization marks so Maya can restart triage fast.
    */
-  const undoDeferrals = useCallback(async () => {
+  const undoAnonymizations = useCallback(async () => {
     if (!selectedId) return;
 
-    const deferredRedactions = redactions.filter((redaction) => redaction.status === 'approved');
-    if (deferredRedactions.length === 0) {
-      showToast('No deferrals to undo', 'warning');
+    const anonymizedRedactions = redactions.filter((redaction) => redaction.status === 'approved');
+    if (anonymizedRedactions.length === 0) {
+      showToast('No anonymizations to undo', 'warning');
       return;
     }
 
     const results = await Promise.all(
-      deferredRedactions.map(async (redaction) => {
-        const response = await fetch(
-          `/api/documents/${selectedId}/redactions/${redaction.id}`,
-          {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: 'rejected' }),
-          },
-        );
-
-        if (!response.ok) {
-          throw new Error(`Failed to undo deferral for ${redaction.id}`);
-        }
-
-        const data: { redaction: Redaction } = await response.json();
-        return data.redaction;
+      anonymizedRedactions.map(async (redaction) => {
+        const status = await updateRedactionStatus(selectedId, redaction.id, 'rejected');
+        return { id: redaction.id, status };
       }),
     );
 
-    const updatedById = new Map(results.map((redaction) => [redaction.id, redaction]));
+    const updatedById = new Map(results.map((item) => [item.id, item.status]));
 
-    setRedactions((prev) => prev.map((redaction) => updatedById.get(redaction.id) ?? redaction));
+    setRedactions((prev) =>
+      prev.map((redaction) =>
+        updatedById.has(redaction.id)
+          ? { ...redaction, status: updatedById.get(redaction.id) ?? redaction.status }
+          : redaction,
+      ),
+    );
     setDetail((prev) =>
       prev
         ? {
             ...prev,
             redactions: prev.redactions.map(
-              (redaction) => updatedById.get(redaction.id) ?? redaction,
+              (redaction) =>
+                updatedById.has(redaction.id)
+                  ? { ...redaction, status: updatedById.get(redaction.id) ?? redaction.status }
+                  : redaction,
             ),
           }
         : prev,
     );
 
-    showToast('All deferrals undone', 'success');
+    showToast('All anonymizations undone', 'success');
   }, [selectedId, redactions, showToast]);
 
-  const deferSelectedAndContinue = useCallback(async () => {
+  const anonymizeAndContinue = useCallback(async () => {
     if (!selectedId) return;
 
     const currentId = selectedId;
 
-    const response = await fetch(`/api/documents/${currentId}/status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: 'approved' }),
-    });
-
-    if (!response.ok) {
-      showToast('Could not defer document', 'warning');
+    try {
+      await updateDocumentStatus(currentId, 'approved');
+    } catch {
+      showToast('Could not anonymize document', 'warning');
       return;
     }
 
@@ -612,15 +812,14 @@ export default function ReviewDashboard() {
     const nextId = findNextPendingId(currentId, queue);
 
     if (nextId) {
-      showToast('Deferred selections applied — advancing queue', 'success');
+      showToast('Document anonymized — advancing queue', 'success');
       setSelectedId(nextId);
     } else if (countPending(queue) === 0) {
-      showToast('Queue cleared!', 'success');
-      // Keep current document open so Maya can keep reviewing or browse with [ ]
+      showToast('Queue anonymized!', 'success');
     } else {
       const fallback = queue.find((doc) => doc.status === 'pending');
       if (fallback) {
-        showToast('Deferred selections applied — advancing queue', 'success');
+        showToast('Document anonymized — advancing queue', 'success');
         setSelectedId(fallback.id);
       }
     }
@@ -631,12 +830,25 @@ export default function ReviewDashboard() {
 
     (async () => {
       try {
+        const healthy = await sidecarHealthCheck();
+        if (!healthy) {
+          throw new Error('Sidecar is not reachable');
+        }
+
+        const existing = await listDocuments();
+        if (!cancelled && existing.length === 0) {
+          await seedSidecar(buildSidecarSeedDocuments());
+        }
+
         const queue = await fetchQueue();
         if (cancelled) return;
         const firstPending = queue.find((doc) => doc.status === 'pending') ?? queue[0];
         if (firstPending) setSelectedId(firstPending.id);
       } catch {
-        if (!cancelled) showToast('Could not load queue', 'warning');
+        if (!cancelled) {
+          setSidecarOffline(true);
+          showToast('Could not load queue', 'warning');
+        }
       } finally {
         if (!cancelled) setIsQueueLoading(false);
       }
@@ -661,10 +873,12 @@ export default function ReviewDashboard() {
       setDetail(null);
       setRedactions([]);
       setActiveRedactionId(null);
+      setViewMode('original');
       spanRefs.current.clear();
       cardRefs.current.clear();
       return;
     }
+    setViewMode('original');
     spanRefs.current.clear();
     cardRefs.current.clear();
     fetchDocumentDetail(selectedId);
@@ -741,12 +955,22 @@ export default function ReviewDashboard() {
         case 'd':
         case 'D':
           event.preventDefault();
-          deferSelectedAndContinue();
+          anonymizeAndContinue();
           break;
         case 'u':
         case 'U':
           event.preventDefault();
-          undoDeferrals();
+          undoAnonymizations();
+          break;
+        case 'o':
+        case 'O':
+          event.preventDefault();
+          setViewMode('original');
+          break;
+        case 'a':
+        case 'A':
+          event.preventDefault();
+          setViewMode('anonymized');
           break;
         default:
           break;
@@ -759,8 +983,8 @@ export default function ReviewDashboard() {
     navigateRedactionCard,
     navigateQueue,
     toggleRedaction,
-    deferSelectedAndContinue,
-    undoDeferrals,
+    anonymizeAndContinue,
+    undoAnonymizations,
     activeRedactionId,
     orderedRedactionIds,
   ]);
@@ -771,7 +995,35 @@ export default function ReviewDashboard() {
     detail?.content ??
     (selectedDoc ? buildMockDocumentBody(selectedDoc.title, redactions) : '');
 
-  const showWorkspace = selectedId && selectedDoc;
+  const anonymizedContent = useMemo(
+    () => buildAnonymizedOutput(viewerContent, redactions),
+    [viewerContent, redactions],
+  );
+
+  const copyAnonymizedOutput = useCallback(async () => {
+    if (!anonymizedContent) return;
+    try {
+      await navigator.clipboard.writeText(anonymizedContent);
+      showToast('Safe output copied to clipboard', 'success');
+    } catch {
+      showToast('Could not copy to clipboard', 'warning');
+    }
+  }, [anonymizedContent, showToast]);
+
+  const downloadAnonymizedOutput = useCallback(() => {
+    if (!anonymizedContent || !selectedDoc) return;
+    const safeTitle = selectedDoc.title.replace(/[^\w.-]+/g, '_').slice(0, 80);
+    const blob = new Blob([anonymizedContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${safeTitle}-anonymized.txt`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    showToast('Safe output downloaded', 'success');
+  }, [anonymizedContent, selectedDoc, showToast]);
+
+  const showWorkspace = selectedId && selectedDoc && !sidecarOffline;
 
   return (
     <div className="grid h-screen grid-cols-12 bg-zinc-950">
@@ -780,9 +1032,16 @@ export default function ReviewDashboard() {
           <div className="mb-3 flex items-center gap-2">
             <span className="text-sm font-bold tracking-tight text-zinc-100">Conseal</span>
             <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] font-medium uppercase text-zinc-400">
-              Bulk Review
+              Anonymize
             </span>
           </div>
+          {!isQueueLoading && documents.length > 0 && (
+            <QueueThroughput
+              total={documents.length}
+              remaining={pendingCount}
+              anonymized={anonymizedCount}
+            />
+          )}
         </div>
 
         <nav className="min-h-0 flex-1 overflow-y-auto" aria-label="Document queue">
@@ -811,15 +1070,22 @@ export default function ReviewDashboard() {
         </footer>
       </aside>
 
-      {showWorkspace ? (
+      {sidecarOffline ? (
+        <SidecarOfflineBanner onRetry={retrySidecarConnection} />
+      ) : showWorkspace ? (
         <>
           <DocumentViewer
             title={selectedDoc.title}
             content={viewerContent}
+            anonymizedContent={anonymizedContent}
             redactions={redactions}
             status={selectedDoc.status}
             isLoading={isDetailLoading}
             isQueueCleared={isQueueCleared}
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
+            onCopyAnonymized={copyAnonymizedOutput}
+            onDownloadAnonymized={downloadAnonymizedOutput}
             activeRedactionId={activeRedactionId}
             scrollContainerRef={scrollContainerRef}
             spanRefs={spanRefs}
@@ -830,8 +1096,8 @@ export default function ReviewDashboard() {
             activeRedactionId={activeRedactionId}
             onActivate={activateRedaction}
             onToggle={toggleRedaction}
-            onDeferSelected={deferSelectedAndContinue}
-            onUndoDeferrals={undoDeferrals}
+            onAnonymizeAndContinue={anonymizeAndContinue}
+            onUndoAnonymizations={undoAnonymizations}
             isLoading={isDetailLoading}
             cardRefs={cardRefs}
             panelRef={rightPanelRef}
