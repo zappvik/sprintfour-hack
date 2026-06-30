@@ -1,2 +1,26 @@
 node_modules
 .next
+out
+dist
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# Env / secrets
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Runtime sidecar state (re-seeded on first app load)
+backend/db.json
