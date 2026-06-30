@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -66,6 +67,37 @@ class UpdateRedactionStatusRequest(BaseModel):
     """Patch payload for redaction toggle status."""
 
     status: RedactionStatus
+
+
+class SeedRedaction(BaseModel):
+    """Seed payload row for a single redaction toggle."""
+
+    id: str
+    kind: str
+    confidence: float
+    original: str
+    start: int
+    end: int
+    status: RedactionStatus
+
+
+class SeedDocument(BaseModel):
+    """Seed payload row for a document summary + review content."""
+
+    id: str
+    title: str
+    character_count: int
+    total_redactions: int
+    confidence_score: float
+    status: DocumentStatus
+    content: str
+    redactions: List[SeedRedaction]
+
+
+class SeedDocumentsRequest(BaseModel):
+    """Bulk seed payload sent by frontend during sidecar bootstrap."""
+
+    documents: List[SeedDocument]
 
 
 def _ensure_db() -> None:
@@ -239,6 +271,14 @@ def _persist_document(
 
 app = FastAPI(title="Conseal Local Sidecar", version="1.0.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.get("/health")
 def health() -> Dict[str, str]:
@@ -273,6 +313,65 @@ def get_document(document_id: str) -> Dict[str, Any]:
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     return {"document_id": document_id, **doc}
+
+
+@app.get("/documents")
+def list_documents() -> Dict[str, Any]:
+    """Lists queue documents for dashboard left panel."""
+    db = _read_db()
+    documents = []
+    for document_id, doc in db["documents"].items():
+        documents.append(
+            {
+                "id": document_id,
+                "title": doc.get("title", f"document-{document_id}"),
+                "characterCount": doc.get("character_count", 0),
+                "totalRedactions": doc.get("total_redactions", 0),
+                "confidenceScore": doc.get("confidence_score", 0),
+                "status": doc.get("status", "pending"),
+            }
+        )
+    return {"documents": documents}
+
+
+@app.post("/seed")
+def seed_documents(payload: SeedDocumentsRequest) -> Dict[str, Any]:
+    """
+    Seeds sidecar persistence with dashboard queue data.
+
+    This is used by the desktop frontend during first run so sidecar has
+    the same working set the UX expects (queue + redaction toggles + content).
+    """
+    db = _read_db()
+
+    for document in payload.documents:
+        redactions = {
+            redaction.id: {
+                "kind": redaction.kind,
+                "confidence": redaction.confidence,
+                "original": redaction.original,
+                "start": redaction.start,
+                "end": redaction.end,
+                "status": redaction.status,
+            }
+            for redaction in document.redactions
+        }
+        token_mapping = {
+            redaction.id: redaction.original for redaction in document.redactions
+        }
+        db["documents"][document.id] = {
+            "status": document.status,
+            "title": document.title,
+            "character_count": document.character_count,
+            "total_redactions": document.total_redactions,
+            "confidence_score": document.confidence_score,
+            "content": document.content,
+            "redactions": redactions,
+            "token_mapping": token_mapping,
+        }
+
+    _write_db(db)
+    return {"seeded": len(payload.documents)}
 
 
 @app.patch("/documents/{document_id}/status")
