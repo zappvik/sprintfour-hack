@@ -2,11 +2,18 @@
   "name": "conseal",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.cjs",
+  "author": "Lohit G",
+  "description": "Bulk document anonymization workstation",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "desktop": "npm run build && electron .",
+    "desktop:app": "electron .",
+    "desktop:dev": "cross-env CONSEAL_DEV=1 electron .",
+    "pack:win": "npm run build && electron-builder --win portable"
   },
   "dependencies": {
     "next": "^15.3.3",
@@ -18,8 +25,40 @@
     "@types/react": "^19.1.6",
     "@types/react-dom": "^19.1.5",
     "autoprefixer": "^10.4.21",
+    "cross-env": "^7.0.3",
+    "electron": "^36.4.0",
+    "electron-builder": "^26.0.12",
     "postcss": "^8.5.4",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.8.3"
+  },
+  "build": {
+    "appId": "com.conseal.desktop",
+    "productName": "Conseal",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "out",
+        "to": "out",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "signAndEditExecutable": false
+    },
+    "portable": {
+      "artifactName": "Conseal-portable.exe"
+    }
   }
 }
