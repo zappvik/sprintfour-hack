@@ -100,6 +100,6 @@ In **Anonymized** view: **Copy safe output** or **Download .txt**.
 |----------|-------|--------|
 | Application | This repo — `START-CONSEAL.bat` | Ready |
 | Writeup (~½ page) | [`WRITEUP.md`](WRITEUP.md) | Ready |
-| Demo video | Record using [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) | **You still need to record** |
+| Demo video | [Vimeo — Conseal demo](https://vimeo.com/1205787772) | Ready |
 | Resume | [`Lohit_Resume.pdf`](Lohit_Resume.pdf) | Ready |
 | Participant info | [`participant.md`](participant.md) | Ready |

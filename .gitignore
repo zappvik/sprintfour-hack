@@ -24,3 +24,6 @@ Thumbs.db
 
 # Runtime sidecar state (re-seeded on first app load)
 backend/db.json
+
+# Demo recording (hosted on Vimeo)
+recording.mp4
