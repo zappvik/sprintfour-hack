@@ -22,12 +22,7 @@ import {
 import type { Document, DocumentStatus, Redaction, RedactionStatus } from '@/types';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
-/** API envelope for GET /api/documents */
-interface DocumentsResponse {
-  documents: Document[];
-}
-
-/** API envelope for GET /api/documents/[id] */
+/** Document detail payload from the sidecar */
 interface DocumentDetailResponse {
   document: Document;
   redactions: Redaction[];
