@@ -8,9 +8,39 @@ Hackathon prototype for **Problem 2: Working at Volume** (Maya, paralegal).
 
 ## Windows — fastest way (recommended)
 
-### First time only
+### Prerequisites (first time only)
 
-1. Install **Node.js** and **Python 3** (both on PATH)
+You need **Node.js** (for the desktop UI) and **Python 3** (for the backend). Both must be on your PATH — open a **new** Command Prompt after installing and run the checks below.
+
+#### Install Node.js
+
+1. Download the **LTS** installer: [https://nodejs.org/en/download](https://nodejs.org/en/download)
+2. Run the `.msi` installer — accept defaults (includes npm and adds Node to PATH).
+3. Official guide: [How to install Node.js](https://nodejs.org/en/learn/getting-started/how-to-install-nodejs)
+
+**Verify:**
+```bash
+node --version
+npm --version
+```
+
+#### Install Python 3
+
+1. Download Python 3: [https://www.python.org/downloads/windows/](https://www.python.org/downloads/windows/)
+2. Run the installer — **check “Add python.exe to PATH”** at the bottom of the first screen, then click **Install Now**.
+3. Official guide: [Python on Windows (Microsoft Learn)](https://learn.microsoft.com/en-us/windows/python/beginners) · [Python docs — Windows](https://docs.python.org/3/using/windows.html)
+
+**Verify:**
+```bash
+python --version
+pip --version
+```
+
+> **Troubleshooting:** If `python` is not recognized, reinstall Python with **Add to PATH** enabled, or use the [Python install manager](https://www.python.org/downloads/windows/) from python.org. Close and reopen any terminal windows after installing.
+
+### First-time project setup
+
+1. Confirm Node.js and Python 3 are installed (see above)
 2. Double-click **`SETUP.bat`** in this folder
 
 ### Every time you use Conseal

@@ -18,9 +18,8 @@ The interaction model is built for speed under pressure: `[` / `]` switch docume
 ## Hard cases I noticed
 
 1. **Review ≠ anonymization.** Early UI framed decisions as “defer,” which sounds like triage, not output. Maya’s job is producing shareable text — so I added a real anonymized preview and export, not just checkboxes.
-2. **Queue cleared ≠ work stopped.** When all files are done, Maya may still need to revisit a file. A full-screen blocker would trap her; I kept the workspace open with a lightweight banner.
-3. **Sidecar offline.** A local app that fails silently is worse than no app. The UI shows an explicit offline state with retry instructions.
-4. **False confidence at volume.** I skipped vanity metrics (“time saved”) and flagging workflows — they add UI weight without helping Maya move faster.
+2. **Sidecar offline.** A local app that fails silently is worse than no app. The UI shows an explicit offline state with retry instructions.
+3. **False confidence at volume.** I skipped vanity metrics (“time saved”) and flagging workflows — they add UI weight without helping Maya move faster.
 
 ## What I chose NOT to build (and why)
 
